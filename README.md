@@ -5,8 +5,9 @@
 Призначення: облік видач примірників читачам 
 
 ## Запуск
-dotnet build
-dotnet run --project src/Cli
+```dotnet build```
+
+```dotnet run --project src/Cli```
 
 ### Середовище
 .NET SDK 10.0, Windows 11 x64 /Ubuntu 24.04 x64
