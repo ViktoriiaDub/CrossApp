@@ -1,21 +1,69 @@
 # CrossApp
-Наскрізний проєкт із крос-платформного програмування
-Предметна область: Бібліотека 
-Сутності: Book(видання), BookCopy(примірник), Reader(читач), Loan(видача).
-Призначення: облік видач примірників читачам 
 
-## Запуск
-```dotnet build```
+Наскрізний проєкт із дисципліни «Крос-платформне програмування».
+- **Студентка**: Дуб Вікторія, група ФЕІ-32
+- **Предметна область**: Бібліотека (видання, примірники, читачі, видачі)
 
-```dotnet run --project src/Cli```
+---
 
-### Середовище
-.NET SDK 10.0, Windows 11 x64 /Ubuntu 24.04 x64
+## Структура Solution
 
+```text
+CrossApp/
+├── CrossApp.sln
+├── README.md
+├── .gitignore
+└── src/
+    ├── Core/                   # Бібліотека класів (Class Library)
+    │   ├── Core.csproj
+    │   ├── EnvironmentInfo.cs   # Логіка збору даних про середовище
+    │   ├── Dto/                # Record-типи формату даних (тиждень 3)
+    │   ├── Domain/             # Доменні сутності (тиждень 4)
+    │   └── Storage/            # Сховища даних (тиждень 5)
+    └── Cli/                    # Консольний застосунок (Console App)
+        ├── Cli.csproj          # ProjectReference на Core
+        └── Program.cs          # Форматування та вивід даних
+```
 
-## Порівнняння розмірівв Self-Contained публікації
-| RID (Платформа) | Файлів | Розмір у байтах | Розмір у MB |
-|---|---|---|---|
-| **`win-x64`** | 192 | 80 381 124 B | ~76.6 MB |
-| **`linux-x64`** | 192 | 82 616 637 B | ~78.7 MB |
-*Висновок:* Публікація під Linux є більшою орієнтовно на 2.2 MB через специфічні для Linux системні компоненти.
+---
+
+##  Команди Build / Run / Publish
+
+* **Збірка (Build)**:
+  ```bash
+  dotnet build
+  ```
+
+* **Запуск (Run)**:
+  ```bash
+  dotnet run --project src/Cli
+  ```
+
+* **Запуск у режимі JSON**:
+  ```bash
+  dotnet run --project src/Cli -- --json
+  ```
+
+* **Публікація (Publish)**:
+  ```bash
+  # Framework-dependent
+  dotnet publish src/Cli -c Release -r win-x64 --self-contained false
+
+  # Self-contained
+  dotnet publish src/Cli -c Release -r win-x64 --self-contained true
+  ```
+
+* **Запуск із папки publish**:
+  ```cmd
+  .\src\Cli\bin\Release\net10.0\win-x64\publish\Cli.exe
+  ```
+
+---
+
+##  Порівняння режимів публікації
+
+| RID | Режим | Розмір publish | Встановлення runtime |
+| :--- | :--- | :--- | :--- |
+| `win-x64` | `self-contained` | ~76.85 МБ | **ні** |
+| `win-x64` | `framework-dependent` | ~0.19 МБ | **так** (.NET 10) |
+| `linux-x64` | `self-contained` | ~78.70 МБ | **ні** |
