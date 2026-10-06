@@ -1,6 +1,7 @@
 # CrossApp
 
 Наскрізний проєкт із дисципліни «Крос-платформне програмування».
+
 - **Студентка**: Дуб Вікторія, група ФЕІ-32
 - **Предметна область**: Бібліотека (видання, примірники, читачі, видачі)
 
@@ -14,56 +15,73 @@ CrossApp/
 ├── README.md
 ├── .gitignore
 └── src/
-    ├── Core/                   # Бібліотека класів (Class Library)
+    ├── Core/                    # Бібліотека класів (Class Library)
     │   ├── Core.csproj
     │   ├── EnvironmentInfo.cs   # Логіка збору даних про середовище
-    │   ├── Dto/                # Record-типи формату даних (тиждень 3)
-    │   ├── Domain/             # Доменні сутності (тиждень 4)
-    │   └── Storage/            # Сховища даних (тиждень 5)
-    └── Cli/                    # Консольний застосунок (Console App)
-        ├── Cli.csproj          # ProjectReference на Core
-        └── Program.cs          # Форматування та вивід даних
+    │   ├── Dto/                 # Record-типи формату даних (тиждень 3)
+    │   ├── Domain/              # Доменні сутності (тиждень 4)
+    │   └── Storage/             # Сховища даних (тиждень 5)
+    └── Cli/                     # Консольний застосунок (Console App)
+        ├── Cli.csproj           # ProjectReference на Core
+        └── Program.cs           # Форматування та вивід даних
 ```
 
 ---
 
-##  Команди Build / Run / Publish
+## Команди Build / Run / Publish
 
-* **Збірка (Build)**:
-  ```bash
-  dotnet build
-  ```
+### Збірка (Build)
 
-* **Запуск (Run)**:
-  ```bash
-  dotnet run --project src/Cli
-  ```
+```bash
+dotnet build
+```
 
-* **Запуск у режимі JSON**:
-  ```bash
-  dotnet run --project src/Cli -- --json
-  ```
+### Запуск (Run)
 
-* **Публікація (Publish)**:
-  ```bash
-  # Framework-dependent
-  dotnet publish src/Cli -c Release -r win-x64 --self-contained false
+```bash
+dotnet run --project src/Cli
+```
 
-  # Self-contained
-  dotnet publish src/Cli -c Release -r win-x64 --self-contained true
-  ```
+### Запуск під конкретні TFM (Multi-Targeting)
 
-* **Запуск із папки publish**:
-  ```cmd
-  .\src\Cli\bin\Release\net10.0\win-x64\publish\Cli.exe
-  ```
+```bash
+# Запуск під .NET 10.0
+dotnet run --project src/Cli -f net10.0
+
+# Запуск під .NET 8.0
+dotnet run --project src/Cli -f net8.0
+```
+
+### Публікація (Publish)
+
+```bash
+# Framework-dependent
+dotnet publish src/Cli -c Release -r win-x64 --self-contained false -f net10.0
+
+# Self-contained
+dotnet publish src/Cli -c Release -r win-x64 --self-contained true -f net10.0
+
+# Single-file Self-contained
+dotnet publish src/Cli -c Release -r win-x64 --self-contained true -f net10.0 -p:PublishSingleFile=true
+
+# Single-file + Trimmed
+dotnet publish src/Cli -c Release -r win-x64 --self-contained true -f net10.0 -p:PublishSingleFile=true -p:PublishTrimmed=true
+```
+
+### Запуск із папки publish
+
+```cmd
+.\src\Cli\bin\Release\net10.0\win-x64\publish\Cli.exe
+```
 
 ---
 
-##  Порівняння режимів публікації
+## Порівняння режимів публікації
 
-| RID | Режим | Розмір publish | Встановлення runtime |
-| :--- | :--- | :--- | :--- |
-| `win-x64` | `self-contained` | ~76.85 МБ | **ні** |
+| RID | Режим / Параметри | Розмір publish | Встановлення runtime |
+| --- | --- | --- | --- |
 | `win-x64` | `framework-dependent` | ~0.19 МБ | **так** (.NET 10) |
+| `win-x64` | `self-contained` | ~76.85 МБ | **ні** |
+| `win-x64` | `self-contained` + `PublishSingleFile` | ~70.15 МБ | **ні** |
+| `win-x64` | `self-contained` + `SingleFile` + `Trimmed` | ~12.57 МБ | **ні** |
 | `linux-x64` | `self-contained` | ~78.70 МБ | **ні** |
