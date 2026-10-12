@@ -1,21 +1,41 @@
-﻿using Core;
+﻿using Core.Dto;
+using Core.Import;
 
-Console.OutputEncoding = System.Text.Encoding.UTF8;
+string path = args.Length > 0 ? args[0] : Path.Combine("data", "sample.csv");
 
-EnvironmentReport report = EnvironmentInfo.Collect();
+if (!File.Exists(path))
+{
+    Console.WriteLine($"Файл не знайдено: {Path.GetFullPath(path)}");
+    return 1;
+}
 
-Console.WriteLine("CrossApp - практикум з крос-платформного програмування");
-Console.WriteLine($"Студентка           : {report.Student}");
-Console.WriteLine("----------------------------------------------------");
-Console.WriteLine($"ОС (OSDescription)  : {report.OsDescription}");
-Console.WriteLine($"ОС (Environment)    : {report.EnvironmentOS}");
-Console.WriteLine($"Архітектура процесу : {report.ProcessArchitecture}");
-Console.WriteLine($"RID (визначено)     : {report.DetectedRid}");
-Console.WriteLine($"RID (від .NET)      : {report.ReportedRid}");
-Console.WriteLine($"Версія .NET (CLR)   : {report.ClrVersion}");
-Console.WriteLine($"Runtime             : {report.RuntimeVersion}");
-Console.WriteLine($"Каталог застосунку  : {report.AppDirectory}");
-Console.WriteLine($"Поточний каталог    : {report.CurrentDirectory}");
-Console.WriteLine("----------------------------------------------------");
-Console.WriteLine($"Примітка збірки     : {report.BuildNote}");
-Console.WriteLine($"Предметна область   : {report.Domain}");
+string extension = Path.GetExtension(path).ToLowerInvariant();
+
+ImportResult<BookDto> result = extension switch
+{
+    ".csv" => BookCsvImporter.Load(path),
+    ".json" => BookJsonImporter.Load(path),
+    _ => new ImportResult<BookDto>([], [$"Непідтримуваний формат файлу: {extension}"])
+};
+
+Console.WriteLine($"Завантажено записів: {result.Items.Count}");
+foreach (BookDto b in result.Items.Take(5))
+{
+    Console.WriteLine($" {b.Id,-6} {b.Isbn,-18} {b.Title,-35} {b.Year,5}");
+}
+
+if (result.Errors.Count > 0)
+{
+    Console.WriteLine($"Пропущено рядків: {result.Errors.Count}");
+    foreach (string e in result.Errors)
+    {
+        Console.WriteLine($" ! {e}");
+    }
+}
+
+int totalAttempted = result.Items.Count + result.Errors.Count;
+double errorRate = totalAttempted > 0 ? (double)result.Errors.Count / totalAttempted * 100 : 0;
+
+Console.WriteLine($"\n[Статистика імпорту]: Усього: {totalAttempted} | Успішно: {result.Items.Count} | Пропущено: {result.Errors.Count} | Помилки: {errorRate:F1}%");
+
+return 0;
