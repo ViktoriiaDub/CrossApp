@@ -44,7 +44,7 @@ public static class BookCsvImporter
 
         return parts switch
         {
-            { Length: < 4 } => new ParseFailed($"очікую 4 колонки, отримав {parts.Length}"),
+            { Length: < 4 } => new ParseFailed($"очікую 4 колонки, отримано {parts.Length}"),
             [var id, "", _, _] => new ParseFailed("ISBN порожній"),
             [var id, var isbn, "", var year] => new ParseFailed("Назва книги порожня"),
             [var id, var isbn, var title, var yearStr] when !int.TryParse(yearStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int y) || y < 1450 || y > DateTime.Now.Year 
