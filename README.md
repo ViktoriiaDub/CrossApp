@@ -24,6 +24,7 @@
 ```text
 CrossApp/
 ├── CrossApp.sln
+├── data
 ├── README.md
 ├── .gitignore
 └── src/
