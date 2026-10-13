@@ -26,7 +26,7 @@ public static class BookJsonImporter
                 index++;
                 try
                 {
-                    // Безпечно зчитуємо поля
+                    //  зчитання полів
                     string id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() ?? "" : "";
                     string isbn = element.TryGetProperty("isbn", out var isbnProp) ? isbnProp.GetString() ?? "" : "";
                     string title = element.TryGetProperty("title", out var titleProp) ? titleProp.GetString() ?? "" : "";
