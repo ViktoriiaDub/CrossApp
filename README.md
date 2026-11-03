@@ -17,6 +17,42 @@
    - `BookJsonImporter`: аналіз масивів об'єктів у форматі JSON за допомогою `JsonDocument` з поелементним виловлюванням аномалій без зупинки програми.
 3. **Кросплатформний CLI-інтерфейс**: динамічний вибір імпортера за розширенням файлу (`.csv` / `.json`) через `switch expression`, захист від відсутності файлу (`File.Exists` + `Path.GetFullPath`) та розширений підрахунок статистики імпорту.
 
+## Лабораторна робота №4: Доменна модель (сутності, інваріанти, інкапсуляція)
+
+### Перелік інваріантів
+
+**BookCopy**
+
+- Ідентифікатор примірника не порожній -`ArgumentException` - `BookCopy.Create`
+- ISBN не порожній - `ArgumentException` - `BookCopy.Create`
+- Назва книги не порожня - `ArgumentException` - `BookCopy.Create`
+- Не можна видати вже виданий примірник - `InvalidOperationException` - `BookCopy.IssueCopy`
+- Не можна повернути примірник, який уже в бібліотеці - `InvalidOperationException` - `BookCopy.ReturnCopy`
+
+**Loan**
+
+- Ідентифікатори видачі, примірника та читача не порожні - `ArgumentException` - `Loan.Open`
+- Дата видачі не може бути в майбутньому - `ArgumentOutOfRangeException` - `Loan.Open`
+- Дата повернення не раніша за дату видачі - `ArgumentOutOfRangeException` - `Loan.Close`
+- Допустимі переходи стану лише `Open → Closed` та `Open → Cancelled`; закриту чи скасовану видачу змінити не можна — `InvalidOperationException` - `Loan.EnsureCanMoveTo` (викликається з `Close` і `Cancel`)
+- Стан і дата повернення в DTO узгоджені (закрита видача має дату, відкрита й скасована не мають) - `ArgumentException` - `Loan.FromDto`
+
+**LoanService (правила між сутностями)**
+
+- Читач має не більше 5 відкритих видач - `InvalidOperationException` - `LoanService.IssueBook`
+- Повернути чи скасувати можна лише існуючу видачу, що стосується цього примірника, і лише коли примірник виданий - `InvalidOperationException` - `LoanService.ReturnBook` / `CancelLoan`
+
+**BookCopyConverter**
+
+- Ідентифікатор книги у файлі не порожній - `ArgumentException` - `BookCopyConverter.Convert`
+
+### Додаткові завдання
+
+1. **Імпорт → сутності + помилки**: `BookCopyConverter.Convert`.
+2. **Інваріант на дві сутності** (ліміт 5 відкритих видач): `LoanService.IssueBook`. Правило винесено в сервіс, бо `Loan` не знає про інші видачі читача, а ліміт є політикою бібліотеки, а не властивістю однієї видачі.
+3. **Стан-перелічування й переходи**: `LoanStatus` та перевірка переходів через `switch` expression в `Loan.EnsureCanMoveTo`.
+
+
 ---
 
 ## Структура Solution
@@ -31,13 +67,14 @@ CrossApp/
     ├── Core/                       # Бібліотека класів (Class Library)
     │   ├── Core.csproj
     │   ├── EnvironmentInfo.cs      # Логіка збору даних про середовище
-    │   ├── Dto/                    # Record-типи даних (BookDto, ImportResult)
+    │   ├── Dto/                    # Record-типи даних (BookDto, BookCopyDto, LoanDto, ImportResult)
     │   ├── Import/                 # Сервіси імпорту (BookCsvImporter, BookJsonImporter)
-    │   ├── Domain/                 # Доменні сутності (тиждень 4)
+    │   ├── Domain/                 # Сутності (BookCopy, Loan, LoanStatus)
+    │   ├── Services/               # LoanService (правила між сутностями), BookCopyConverter (DTO → сутності)
     │   └── Storage/                # Сховища даних (тиждень 5)
     └── Cli/                        # Консольний застосунок (Console App)
         ├── Cli.csproj              # ProjectReference на Core
-        └── Program.cs              # Інтерфейс командного рядка та вивід статистики
+        └── Program.cs              # Сценарії успіху, порушень та додаткових завдань
 ```
 
 ---
@@ -125,4 +162,3 @@ dotnet publish src/Cli -c Release -r win-x64 --self-contained true -f net10.0 -p
 | `win-x64` | `framework-dependent` | ~0.19 МБ | **так** (.NET 10) |
 | `win-x64` | `self-contained` | ~76.85 МБ | **ні** |
 | `win-x64` | `self-contained` + `PublishSingleFile` | ~70.15 МБ | **ні** |
-| `win-x64` |
