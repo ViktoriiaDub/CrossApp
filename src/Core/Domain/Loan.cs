@@ -121,11 +121,11 @@ public sealed class Loan
     }
 
     public override string ToString() =>
-        $"Видача {Id}: примірник {CopyId}, читач {ReaderId}, з {IssuedOn:yyyy-MM-dd} " +
+        $"Видача {Id}: примірник {CopyId}, читач {ReaderId}, з {IssuedOn:dd-MM-yyyy} " +
         Status switch
         {
             LoanStatus.Open => "(відкрита)",
-            LoanStatus.Closed => $"по {ReturnedOn:yyyy-MM-dd} (закрита)",
+            LoanStatus.Closed => $"по {ReturnedOn:dd-MM-yyyy} (закрита)",
             LoanStatus.Cancelled => "(скасована)",
             _ => ""
         };
