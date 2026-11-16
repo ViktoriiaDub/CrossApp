@@ -1,59 +1,102 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Core.Abstractions;
 using Core.Domain;
 
 namespace Core.Services;
-
-public sealed class LoanService
+//Dependency Injection
+public sealed class LoanService(ILibraryStore store)
 {
-    public const int MaxOpenLoansPerReader = 5;
+    //збереження переданого сховища у приватнре поле, якщо перпедано null-> помилка
+    private readonly ILibraryStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
-    private readonly List<Loan> _loans = [];
+    public const int MaxOpenLoansPerReader = 5;//константа, 1 читач- максимум 5 книг
+
+    private readonly List<Loan> _loans = []; //тимчасови список усіх видач у пам"яті сервісу+лічильник
     private int _nextLoanNumber = 1;
 
-    public IReadOnlyList<Loan> Loans => _loans.AsReadOnly();
+    public IReadOnlyList<Loan> Loans => _loans.AsReadOnly(); //ззовні можна подивитись список видач без змін напряму 
 
     public int CountOpenLoans(string readerId) =>
         _loans.Count(l => l.Status == LoanStatus.Open &&
                           string.Equals(l.ReaderId, readerId?.Trim(), StringComparison.Ordinal));
 
-    public Loan IssueBook(BookCopy copy, string readerId, DateTime issuedOn)
+    // Додавання нового примірника до сховища (через сервіс)
+    public BookCopy AddBookCopy(string isbn, string title)
     {
-        ArgumentNullException.ThrowIfNull(copy);
+        // IsIssued = false, бо примірник новий і ще не виданий
+        var copy = BookCopy.Create(Guid.NewGuid().ToString("N")[..8], isbn, title, false);
 
-        // створення видачі: перевіряє аргументи без стану
-        var loan = Loan.Open($"L-{_nextLoanNumber:D4}", copy.Id, readerId, issuedOn);
+        _store.Add(copy);
+        return copy;
+    }
 
-        // охоплення двох сутностей / набір видач
-        int open = CountOpenLoans(loan.ReaderId);
+    public Loan IssueBook(string copyId, string readerId, DateTime issuedOn)
+    {
+        // примірник зі сховища за його ID
+        var copy = _store.GetById(copyId)
+            ?? throw new InvalidOperationException($"Примірник з id={copyId} не знайдено у сховищі.");
+
+        // перевірка ліміту відкритих видач на читача
+        int open = CountOpenLoans(readerId);
         if (open >= MaxOpenLoansPerReader)
             throw new InvalidOperationException(
-                $"Читач '{loan.ReaderId}' уже має {open} відкритих видач (ліміт {MaxOpenLoansPerReader}): " +
-                $"примірник {copy.Id} видати не можна");
+                $"Читач '{readerId}' уже має {open} відкритих видач (ліміт {MaxOpenLoansPerReader}): " +
+                $"примірник {copyId} видати не можна");
 
-        //зміна стану: якщо копія вже видана то виняток, нічого не збережено
+        // створення видачі- Loan.Open перевіряє інваріанти (читач, дата).
+        // якщо кине виняток- примірник  не змінений і нічого не збережено.
+        var loan = Loan.Open($"L-{_nextLoanNumber:D4}", copy.Id, readerId, issuedOn);
+
+        //зміна стану після успішної валідації
         copy.IssueCopy();
 
+        //збереження оновленого стану примірника у сховище
+        _store.Update(copy);
+
+        // реєстрація видачі
         _loans.Add(loan);
         _nextLoanNumber++;
         return loan;
     }
 
-    public void ReturnBook(string loanId, BookCopy copy, DateTime returnedOn)
+    public void ReturnBook(string loanId, string copyId, DateTime returnedOn)
     {
+        var copy = _store.GetById(copyId)
+            ?? throw new InvalidOperationException($"Примірник з id={copyId} не знайдено.");
+
         var loan = GetLoan(loanId, copy);
         EnsureCopyIssued(copy);
 
-        loan.Close(returnedOn);   // якщо кине виняток то копія не змінена
+        loan.Close(returnedOn);   // якщо кине виняток- копія не змінена
         copy.ReturnCopy();
+
+        _store.Update(copy);
     }
 
-    public void CancelLoan(string loanId, BookCopy copy)
+    public void CancelLoan(string loanId, string copyId)
     {
+        var copy = _store.GetById(copyId)
+            ?? throw new InvalidOperationException($"Примірник з id={copyId} не знайдено.");
+
         var loan = GetLoan(loanId, copy);
         EnsureCopyIssued(copy);
 
         loan.Cancel();
         copy.ReturnCopy();
+
+        _store.Update(copy);
     }
+
+    // Допоміжні методи для отримання списку або пошуку через сховище
+    public IReadOnlyList<BookCopy> AllBooks() => _store.List();
+
+    public BookCopy? FindBook(string id) => _store.GetById(id);
+
+    // Додаткове завдання 2: пошук за довільною умовою
+    public IReadOnlyList<BookCopy> SearchBooks(Func<BookCopy, bool> predicate) =>
+        _store.Find(predicate);
 
     private Loan GetLoan(string loanId, BookCopy copy)
     {

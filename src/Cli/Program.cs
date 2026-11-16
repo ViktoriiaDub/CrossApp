@@ -1,156 +1,211 @@
-﻿using Core.Converters;
+﻿using Core.Abstractions;
+using Core.Converters;
 using Core.Services;
 using Core.Domain;
 using Core.Dto;
 using Core.Import;
+using Core.Storage;
 
-string path = args.Length > 0 ? args[0] : Path.Combine("data", "sample.csv");
 
-if (!File.Exists(path))
+bool useFile = args.Contains("--file");
+string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "library.json");
+//шлях до файлу
+string path = args.FirstOrDefault(a => a != "--file") ?? Path.Combine("data", "sample.csv");
+
+// початкові дані з імпорту sample.csv+конвертація у доменні об'єкти
+List<BookCopy> initialCopies = [];
+if (File.Exists(path))
 {
-    Console.WriteLine($"Файл не знайдено: {Path.GetFullPath(path)}");
-    return 1;
+    string extension = Path.GetExtension(path).ToLowerInvariant();
+    ImportResult<BookDto> fileResult = extension switch
+    {
+        ".csv" => BookCsvImporter.Load(path),
+        ".json" => BookJsonImporter.Load(path),
+        _ => new ImportResult<BookDto>([], [$"непідтримуваний формат файлу '{extension}'"])
+    };
+
+    var copiesResult = BookCopyConverter.Convert(fileResult);
+    initialCopies = copiesResult.Items.ToList();
+
+    if (copiesResult.Errors.Count > 0)
+    {
+        Console.WriteLine($"[Помилки імпорту ({copiesResult.Errors.Count}):]");
+        foreach (string error in copiesResult.Errors)
+            Console.WriteLine($"   - {error}");
+        Console.WriteLine();
+    }
+}
+else
+{
+    Console.WriteLine($"[Файл імпорту '{path}' не знайдено]\n");
 }
 
-string extension = Path.GetExtension(path).ToLowerInvariant();
+// чи існує файл сховища до його створення
+bool fileExists = File.Exists(dataPath);
 
-ImportResult<BookDto> fileResult = extension switch
+//ручний DI: вибір реалізації сховища
+ILibraryStore store = useFile
+    ? new FileLibraryStore(dataPath)
+    : new InMemoryLibraryStore(initialCopies);
+
+// Файловий режим, а library.json ще немає — заповнюємо його даними з імпорту
+if (useFile && !fileExists && initialCopies.Count > 0)
 {
-    ".csv" => BookCsvImporter.Load(path),
-    ".json" => BookJsonImporter.Load(path),
-    _ => new ImportResult<BookDto>([], [$"Непідтримуваний формат файлу: {extension}"])
-};
-
-ImportResult<BookCopy> copiesResult = BookCopyConverter.Convert(fileResult);
-
-int fileErrors = fileResult.Errors.Count;
-int domainErrors = copiesResult.Errors.Count - fileErrors;
-
-Console.WriteLine($"=== Імпорт: {path} ===");
-Console.WriteLine($"Прочитано з файлу:             {fileResult.Items.Count}");
-Console.WriteLine($"Створено примірників:          {copiesResult.Items.Count}");
-Console.WriteLine($"Відхилено на рівні файлу:      {fileErrors}");
-Console.WriteLine($"Відхилено інваріантами домену: {domainErrors}");
-
-if (copiesResult.Errors.Count > 0)
-{
-    Console.WriteLine("\nПомилки:");
-    foreach (string err in copiesResult.Errors)
-        Console.WriteLine($"  ! {err}");
+    foreach (var initialCopy in initialCopies)
+    {
+        store.Add(initialCopy);
+    }
+    Console.WriteLine($"[Автоматично створено та заповнено сховище з імпорту: {initialCopies.Count} примірників]\n");
 }
 
-Console.WriteLine("\nУсі примірники:");
-foreach (BookCopy c in copiesResult.Items)
-    Console.WriteLine($"  {c}");
+//сервіс отримує сховище через конструктор
+var service = new LoanService(store);
 
-BookCopy? copy = copiesResult.Items.FirstOrDefault();
-if (copy is null)
+Console.WriteLine($" Сховище: {store.GetType().Name} ");
+Console.WriteLine($"Кількість книг у сховищі: {service.AllBooks().Count}");
+
+//сценарій 1, операції через loanservice 
+Console.WriteLine("\n=== Сценарій 1: додати → знайти за id → змінити → список ===");
+
+//lодати
+BookCopy added = service.AddBookCopy("978-966-03-1234-5", "Тестова книга для демонстрації");
+Console.WriteLine($"1. Додано:            {added}");
+
+// pнайти за id
+BookCopy? found = service.FindBook(added.Id);
+Console.WriteLine($"2. Знайдено за id:    {found?.ToString() ?? "не знайдено"}");
+
+// pмінити (видача, потім повернення)
+Loan loan = service.IssueBook(added.Id, "Reader-Ivan", DateTime.Now.AddDays(-2));
+Console.WriteLine($"3. Після видачі:      {service.FindBook(added.Id)}");
+Console.WriteLine($"                      {loan}");
+
+service.ReturnBook(loan.Id, added.Id, DateTime.Now);
+Console.WriteLine($"   Після повернення:  {service.FindBook(added.Id)}");
+Console.WriteLine($"                      {loan}");
+
+// показати список
+Console.WriteLine("4. Усі примірники у сховищі:");
+foreach (BookCopy item in service.AllBooks())
 {
-    Console.WriteLine("\nУ файлі немає коректних книг для демонстрації.");
-    return 0;
+    Console.WriteLine($"   {item}");
 }
 
-Console.WriteLine("\n=== Сценарій 1: успіх (примірник з файлу) ===");
-Console.WriteLine($"Початок:          {copy}");
+//сценарій 2 лаб 4- порушення інваріантів
+Console.WriteLine("\nСценарій 2: порушення інваріантів");
 
-copy.IssueCopy();
-Loan loan = Loan.Open("L-500", copy.Id, "Reader-Ivan", DateTime.Now.AddDays(-2));
-Console.WriteLine($"Після видачі:     {copy}");
-Console.WriteLine($"                  {loan}");
-
-loan.Close(DateTime.Now);
-copy.ReturnCopy();
-Console.WriteLine($"Після повернення: {copy}");
-Console.WriteLine($"                  {loan}");
-
-BookCopy restored = BookCopy.FromDto(copy.ToDto());
-Console.WriteLine($"FromDto(ToDto):   {restored}");
-
-Console.WriteLine("\n=== Сценарій 2: порушення інваріантів (той самий примірник) ===");
-
-// Підготовка: знову видаємо цей самий примірник і відкриваємо нову видачу
-copy.IssueCopy();
-Loan active = Loan.Open("L-501", copy.Id, "Reader-Petro", DateTime.Now.AddDays(-1));
-Console.WriteLine($"Підготовка: {copy}");
+BookCopy sample = BookCopy.Create("DEMO-1", "978-0-00-000000-0", "Демонстраційний примірник");
+sample.IssueCopy();
+Loan active = Loan.Open("L-DEMO", sample.Id, "Reader-Petro", DateTime.Now.AddDays(-1));
+Console.WriteLine($"Підготовка: {sample}");
 Console.WriteLine($"            {active}\n");
 
 TryDo("Повторна видача виданого примірника",
-      () => copy.IssueCopy());
+      () => sample.IssueCopy());
 TryDo("Порожній ISBN при створенні примірника",
-      () => BookCopy.Create(copy.Id, " ", copy.Title));
+      () => BookCopy.Create(sample.Id, " ", sample.Title, false));
 TryDo("Порожній ідентифікатор читача",
-      () => Loan.Open("L-502", copy.Id, " ", DateTime.Now));
+      () => Loan.Open("L-DEMO-2", sample.Id, " ", DateTime.Now));
 TryDo("Дата видачі в майбутньому",
-      () => Loan.Open("L-503", copy.Id, "Reader-Petro", DateTime.Now.AddDays(3)));
+      () => Loan.Open("L-DEMO-3", sample.Id, "Reader-Petro", DateTime.Now.AddDays(3)));
 TryDo("Повернення раніше дати видачі",
       () => active.Close(active.IssuedOn.AddDays(-1)));
 
-// Коректно закриваємо, щоб перевірити два останні правила
-active.Close(DateTime.Now);
-copy.ReturnCopy();
+//ліміт видач
+Console.WriteLine("\nЛіміт відкритих видач (сервіс) ");
 
-TryDo("Повторне закриття вже закритої видачі",
-      () => active.Close(DateTime.Now));
-TryDo("Повернення примірника, який уже в бібліотеці",
-      () => copy.ReturnCopy());
+var free = service.AllBooks()
+                  .Where(b => !b.IsIssued)
+                  .Take(6)
+                  .ToList();
 
-Console.WriteLine("\nСтан після всіх відмов (відмови нічого не змінили):");
-Console.WriteLine($"  {copy}");
-Console.WriteLine($"  {active}");
-
-
-Console.WriteLine("\n=== Додаткове завдання 2: ліміт відкритих видач (сервіс) ===");
-
-// Беремо примірники з імпортованого файлу (пропускаємо перший, він використаний вище)
-var demo = copiesResult.Items.Skip(1).Take(6).ToList();
-
-if (demo.Count < 6)
+if (free.Count < 6)
 {
-    Console.WriteLine("У файлі менше 7 коректних примірників — демонстрацію пропущено.");
+    Console.WriteLine("У сховищі менше 6 вільних примірників - демонстрацію ліміту пропущено.");
 }
 else
 {
     const string reader = "Reader-Anna";
-    var service = new LoanService();
+    var annLoans = new List<Loan>();
 
-    for (int i = 0; i < 5; i++)
-        service.IssueBook(demo[i], reader, DateTime.Now);
+    try
+    {
+        for (int i = 0; i < MaxLoans(); i++)
+        {
+            annLoans.Add(service.IssueBook(free[i].Id, reader, DateTime.Now));
+        }
 
-    Console.WriteLine($"Відкритих видач у {reader}: {service.CountOpenLoans(reader)}");
+        Console.WriteLine($"Відкритих видач у {reader}: {service.CountOpenLoans(reader)}");
 
-    TryDo("Шоста видача тому ж читачу",
-          () => service.IssueBook(demo[5], reader, DateTime.Now));
-    Console.WriteLine($"    Примірник після відмови: {demo[5]}");
+        TryDo("Шоста видача тому ж читачу",
+              () => service.IssueBook(free[5].Id, reader, DateTime.Now));
 
-    service.ReturnBook(service.Loans[0].Id, demo[0], DateTime.Now);
-    service.IssueBook(demo[5], reader, DateTime.Now);
-    Console.WriteLine($"Після повернення однієї книги шоста видача пройшла: {demo[5]}");
+        // Повертаємо першу книгу -ліміт звільняється
+        service.ReturnBook(annLoans[0].Id, free[0].Id, DateTime.Now);
+        annLoans.Add(service.IssueBook(free[5].Id, reader, DateTime.Now));
+        Console.WriteLine($"Після повернення однієї книги шоста видача пройшла успішно для примірника: {free[5].Id}");
+    }
+    finally
+    {
+        //повернення  відкритих видач Reader-Anna, щоб не лишалось прим. без видач
+        foreach (Loan open in annLoans.Where(x => x.Status == LoanStatus.Open).ToList())
+        {
+            service.ReturnBook(open.Id, open.CopyId, DateTime.Now);
+        }
+        Console.WriteLine($"Прибирання: відкритих видач у {reader}: {service.CountOpenLoans(reader)}");
+    }
 }
 
-Console.WriteLine("\n=== Додаткове завдання 3: статуси видачі та переходи (LoanStatus) ===");
+//сценарій відмови 
+Console.WriteLine("\n КРОК 6: Сценарій відмови (try/catch)");
 
-string statusCopyId = copiesResult.Items[0].Id;   // ID реального примірника з файлу
-
-var cancelled = Loan.Open("L-900", statusCopyId, "Reader-Ivan", DateTime.Now);
-Console.WriteLine($"Старт:       {cancelled}");
-cancelled.Cancel();
-Console.WriteLine($"Скасовано:   {cancelled}");
-
-TryDo("Закрити скасовану видачу", () => cancelled.Close(DateTime.Now));
-TryDo("Скасувати вже скасовану", () => cancelled.Cancel());
-TryDo("Скасувати закриту видачу", () =>
+// додавання у сховище об'єкта із дублюючим ID
+try
 {
-    var l = Loan.Open("L-901", statusCopyId, "Reader-Ivan", DateTime.Now.AddDays(-1));
-    l.Close(DateTime.Now);
-    l.Cancel();
-});
+    BookCopy? existingBook = service.AllBooks().FirstOrDefault();
+    if (existingBook != null)
+    {
+        var duplicateBook = BookCopy.Create(existingBook.Id, "978-966-00-0000-0", "Книга-Дублікат", false);
+        store.Add(duplicateBook);
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Успішно перехоплено помилку сховища]: {ex.Message}");
+}
 
-var returned = Loan.Open("L-902", statusCopyId, "Reader-Ivan", DateTime.Now.AddDays(-1));
-Console.WriteLine($"Нова:        {returned}");
-returned.Close(DateTime.Now);
-Console.WriteLine($"Закрита:     {returned}  [Status = {returned.Status}]");
+// операція з неіснуючим ID
+try
+{
+    service.IssueBook("wrong-id-12345", "Reader-Oleh", DateTime.Now);
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Успішно перехоплено помилку сервісу]: {ex.Message}");
+}
 
+//додаткове 2
+Console.WriteLine("\n=== Додаткове завдання 2: пошук з Func<BookCopy, bool> ===");
+
+//всі вільні примірники
+var availableBooks = service.SearchBooks(b => !b.IsIssued);
+Console.WriteLine($"Вільних книг у бібліотеці: {availableBooks.Count}");
+
+//за частиною назви 
+var specificBooks = service.SearchBooks(b => b.Title.Contains("Вавилон", StringComparison.OrdinalIgnoreCase));
+if (specificBooks.Count == 0)
+{
+    Console.WriteLine("За назвою 'Вавилон' нічого не знайдено.");
+}
+foreach (BookCopy book in specificBooks)
+{
+    Console.WriteLine($"Знайдено за назвою: {book}");
+}
+
+Console.WriteLine("\n=== Кінець роботи програми ===");
 return 0;
+//допоміжні
+static int MaxLoans() => LoanService.MaxOpenLoansPerReader;
 
 static void TryDo(string rule, Action action)
 {
