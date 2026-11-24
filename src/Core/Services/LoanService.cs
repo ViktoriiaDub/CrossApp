@@ -3,61 +3,69 @@ using System.Collections.Generic;
 using System.Linq;
 using Core.Abstractions;
 using Core.Domain;
+using Core.Events;
 
 namespace Core.Services;
-//Dependency Injection
+
+// Dependency Injection
 public sealed class LoanService(ILibraryStore store)
 {
-    //збереження переданого сховища у приватнре поле, якщо перпедано null-> помилка
     private readonly ILibraryStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
-    public const int MaxOpenLoansPerReader = 5;//константа, 1 читач- максимум 5 книг
+    public const int MaxOpenLoansPerReader = 5; // 1 читач — максимум 5 книг
+    public const int DefaultLoanDays = 14;      // стандартний термін видачі (для DueDate)
 
-    private readonly List<Loan> _loans = []; //тимчасови список усіх видач у пам"яті сервісу+лічильник
+    private readonly List<Loan> _loans = [];
     private int _nextLoanNumber = 1;
 
-    public IReadOnlyList<Loan> Loans => _loans.AsReadOnly(); //ззовні можна подивитись список видач без змін напряму 
+    // Подія сповіщення про зміни в бібліотеці
+    public event EventHandler<LibraryChangedEventArgs>? Changed;
+
+    private void OnChanged(LibraryChangeKind kind, string copyId, string? readerId = null, DateTime? dueDate = null) =>
+        Changed?.Invoke(this, new LibraryChangedEventArgs(kind, copyId, readerId, dueDate));
+
+    public IReadOnlyList<Loan> Loans => _loans.AsReadOnly();
 
     public int CountOpenLoans(string readerId) =>
         _loans.Count(l => l.Status == LoanStatus.Open &&
                           string.Equals(l.ReaderId, readerId?.Trim(), StringComparison.Ordinal));
 
-    // Додавання нового примірника до сховища (через сервіс)
+    // Додавання нового примірника до сховища
     public BookCopy AddBookCopy(string isbn, string title)
     {
-        // IsIssued = false, бо примірник новий і ще не виданий
         var copy = BookCopy.Create(Guid.NewGuid().ToString("N")[..8], isbn, title, false);
 
         _store.Add(copy);
+
+        // Піднімаємо подію ПІСЛЯ успішного збереження
+        OnChanged(LibraryChangeKind.BookAdded, copy.Id);
         return copy;
     }
 
     public Loan IssueBook(string copyId, string readerId, DateTime issuedOn)
     {
-        // примірник зі сховища за його ID
         var copy = _store.GetById(copyId)
             ?? throw new InvalidOperationException($"Примірник з id={copyId} не знайдено у сховищі.");
 
-        // перевірка ліміту відкритих видач на читача
         int open = CountOpenLoans(readerId);
         if (open >= MaxOpenLoansPerReader)
             throw new InvalidOperationException(
                 $"Читач '{readerId}' уже має {open} відкритих видач (ліміт {MaxOpenLoansPerReader}): " +
                 $"примірник {copyId} видати не можна");
 
-        // створення видачі- Loan.Open перевіряє інваріанти (читач, дата).
-        // якщо кине виняток- примірник  не змінений і нічого не збережено.
+        // Перевірка інваріантів у Loan.Open та BookCopy.IssueCopy
         var loan = Loan.Open($"L-{_nextLoanNumber:D4}", copy.Id, readerId, issuedOn);
-
-        //зміна стану після успішної валідації
         copy.IssueCopy();
 
-        //збереження оновленого стану примірника у сховище
         _store.Update(copy);
 
-        // реєстрація видачі
         _loans.Add(loan);
         _nextLoanNumber++;
+
+        // Розраховуємо планову дату повернення (DueDate) і піднімаємо подію ПІСЛЯ всіх змін
+        DateTime dueDate = issuedOn.AddDays(DefaultLoanDays);
+        OnChanged(LibraryChangeKind.CopyIssued, copy.Id, loan.ReaderId, dueDate);
+
         return loan;
     }
 
@@ -69,10 +77,13 @@ public sealed class LoanService(ILibraryStore store)
         var loan = GetLoan(loanId, copy);
         EnsureCopyIssued(copy);
 
-        loan.Close(returnedOn);   // якщо кине виняток- копія не змінена
+        loan.Close(returnedOn); // якщо кине виняток — копія не змінена і події не буде
         copy.ReturnCopy();
 
         _store.Update(copy);
+
+        // Піднімаємо подію ПІСЛЯ успішного повернення
+        OnChanged(LibraryChangeKind.CopyReturned, copy.Id, loan.ReaderId);
     }
 
     public void CancelLoan(string loanId, string copyId)
@@ -87,14 +98,15 @@ public sealed class LoanService(ILibraryStore store)
         copy.ReturnCopy();
 
         _store.Update(copy);
+
+        OnChanged(LibraryChangeKind.LoanCanceled, copy.Id, loan.ReaderId);
     }
 
-    // Допоміжні методи для отримання списку або пошуку через сховище
     public IReadOnlyList<BookCopy> AllBooks() => _store.List();
 
     public BookCopy? FindBook(string id) => _store.GetById(id);
 
-    // Додаткове завдання 2: пошук за довільною умовою
+    // Пошук за довільною умовою через Func<BookCopy, bool>
     public IReadOnlyList<BookCopy> SearchBooks(Func<BookCopy, bool> predicate) =>
         _store.Find(predicate);
 

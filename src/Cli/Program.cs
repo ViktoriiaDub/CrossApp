@@ -3,16 +3,15 @@ using Core.Converters;
 using Core.Services;
 using Core.Domain;
 using Core.Dto;
+using Core.Events;
 using Core.Import;
 using Core.Storage;
 
-
 bool useFile = args.Contains("--file");
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "library.json");
-//шлях до файлу
 string path = args.FirstOrDefault(a => a != "--file") ?? Path.Combine("data", "sample.csv");
 
-// початкові дані з імпорту sample.csv+конвертація у доменні об'єкти
+// 1. Початкові дані з імпорту
 List<BookCopy> initialCopies = [];
 if (File.Exists(path))
 {
@@ -40,173 +39,137 @@ else
     Console.WriteLine($"[Файл імпорту '{path}' не знайдено]\n");
 }
 
-// чи існує файл сховища до його створення
 bool fileExists = File.Exists(dataPath);
 
-//ручний DI: вибір реалізації сховища
+// Ручний DI: вибір реалізації сховища
 ILibraryStore store = useFile
     ? new FileLibraryStore(dataPath)
     : new InMemoryLibraryStore(initialCopies);
 
-// Файловий режим, а library.json ще немає — заповнюємо його даними з імпорту
 if (useFile && !fileExists && initialCopies.Count > 0)
 {
     foreach (var initialCopy in initialCopies)
-    {
         store.Add(initialCopy);
-    }
+
     Console.WriteLine($"[Автоматично створено та заповнено сховище з імпорту: {initialCopies.Count} примірників]\n");
 }
 
-//сервіс отримує сховище через конструктор
+// Сервіс отримує сховище через конструктор
 var service = new LoanService(store);
 
-Console.WriteLine($" Сховище: {store.GetType().Name} ");
-Console.WriteLine($"Кількість книг у сховищі: {service.AllBooks().Count}");
+Console.WriteLine($"Сховище: {store.GetType().Name}");
+Console.WriteLine($"Кількість книг у сховищі: {service.AllBooks().Count}\n");
 
-//сценарій 1, операції через loanservice 
-Console.WriteLine("\n=== Сценарій 1: додати → знайти за id → змінити → список ===");
+// ЛАБОРАТОРНА РОБОТА 6: Події, делегати Action/Func, лямбди
 
-//lодати
-BookCopy added = service.AddBookCopy("978-966-03-1234-5", "Тестова книга для демонстрації");
-Console.WriteLine($"1. Додано:            {added}");
+// КРОК 3: Підписка локальним методом (вивід у консоль + запис у logs/app.log)
+var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log"); //dod7
+Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
 
-// pнайти за id
-BookCopy? found = service.FindBook(added.Id);
-Console.WriteLine($"2. Знайдено за id:    {found?.ToString() ?? "не знайдено"}");
-
-// pмінити (видача, потім повернення)
-Loan loan = service.IssueBook(added.Id, "Reader-Ivan", DateTime.Now.AddDays(-2));
-Console.WriteLine($"3. Після видачі:      {service.FindBook(added.Id)}");
-Console.WriteLine($"                      {loan}");
-
-service.ReturnBook(loan.Id, added.Id, DateTime.Now);
-Console.WriteLine($"   Після повернення:  {service.FindBook(added.Id)}");
-Console.WriteLine($"                      {loan}");
-
-// показати список
-Console.WriteLine("4. Усі примірники у сховищі:");
-foreach (BookCopy item in service.AllBooks())
+void OnLibraryChanged(object? sender, LibraryChangedEventArgs e)
 {
-    Console.WriteLine($"   {item}");
-}
+    string details = e.Kind switch
+    {
+        LibraryChangeKind.BookAdded => "додано новий примірник до фонду",
+        LibraryChangeKind.CopyIssued => $"видано читачу {e.ReaderId} до дати {e.DueDate:yyyy-MM-dd}",
+        LibraryChangeKind.CopyReturned => $"повернуто читачем {e.ReaderId}",
+        LibraryChangeKind.LoanCanceled => $"видачу скасовано (читач {e.ReaderId})",
+        _ => string.Empty
+    };
 
-//сценарій 2 лаб 4- порушення інваріантів
-Console.WriteLine("\nСценарій 2: порушення інваріантів");
+    var line = $"{e.At:HH:mm:ss} {e.Kind,-13} [{e.CopyId}] -> {details}";
+    Console.WriteLine($"  [LOG] {line}");
 
-BookCopy sample = BookCopy.Create("DEMO-1", "978-0-00-000000-0", "Демонстраційний примірник");
-sample.IssueCopy();
-Loan active = Loan.Open("L-DEMO", sample.Id, "Reader-Petro", DateTime.Now.AddDays(-1));
-Console.WriteLine($"Підготовка: {sample}");
-Console.WriteLine($"            {active}\n");
-
-TryDo("Повторна видача виданого примірника",
-      () => sample.IssueCopy());
-TryDo("Порожній ISBN при створенні примірника",
-      () => BookCopy.Create(sample.Id, " ", sample.Title, false));
-TryDo("Порожній ідентифікатор читача",
-      () => Loan.Open("L-DEMO-2", sample.Id, " ", DateTime.Now));
-TryDo("Дата видачі в майбутньому",
-      () => Loan.Open("L-DEMO-3", sample.Id, "Reader-Petro", DateTime.Now.AddDays(3)));
-TryDo("Повернення раніше дати видачі",
-      () => active.Close(active.IssuedOn.AddDays(-1)));
-
-//ліміт видач
-Console.WriteLine("\nЛіміт відкритих видач (сервіс) ");
-
-var free = service.AllBooks()
-                  .Where(b => !b.IsIssued)
-                  .Take(6)
-                  .ToList();
-
-if (free.Count < 6)
-{
-    Console.WriteLine("У сховищі менше 6 вільних примірників - демонстрацію ліміту пропущено.");
-}
-else
-{
-    const string reader = "Reader-Anna";
-    var annLoans = new List<Loan>();
-
+    // Виняток у підписнику не повинен ламати бізнес-операцію в сервісі
     try
     {
-        for (int i = 0; i < MaxLoans(); i++)
-        {
-            annLoans.Add(service.IssueBook(free[i].Id, reader, DateTime.Now));
-        }
-
-        Console.WriteLine($"Відкритих видач у {reader}: {service.CountOpenLoans(reader)}");
-
-        TryDo("Шоста видача тому ж читачу",
-              () => service.IssueBook(free[5].Id, reader, DateTime.Now));
-
-        // Повертаємо першу книгу -ліміт звільняється
-        service.ReturnBook(annLoans[0].Id, free[0].Id, DateTime.Now);
-        annLoans.Add(service.IssueBook(free[5].Id, reader, DateTime.Now));
-        Console.WriteLine($"Після повернення однієї книги шоста видача пройшла успішно для примірника: {free[5].Id}");
+        File.AppendAllText(logPath, line + Environment.NewLine);
     }
-    finally
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     {
-        //повернення  відкритих видач Reader-Anna, щоб не лишалось прим. без видач
-        foreach (Loan open in annLoans.Where(x => x.Status == LoanStatus.Open).ToList())
-        {
-            service.ReturnBook(open.Id, open.CopyId, DateTime.Now);
-        }
-        Console.WriteLine($"Прибирання: відкритих видач у {reader}: {service.CountOpenLoans(reader)}");
+        Console.WriteLine($"  [LOG] Не вдалося записати у файл: {ex.Message}");
     }
 }
 
-//сценарій відмови 
-Console.WriteLine("\n КРОК 6: Сценарій відмови (try/catch)");
+service.Changed += OnLibraryChanged; //dod4
 
-// додавання у сховище об'єкта із дублюючим ID
-try
+// КРОК 4: Другий підписник- лямбда із замиканням над локальною змінною.
+// Виводить [COUNT] після кожного [LOG], щоб було видно порядок підписки.
+int changes = 0;
+service.Changed += (_, _) => //dod4 
 {
-    BookCopy? existingBook = service.AllBooks().FirstOrDefault();
-    if (existingBook != null)
-    {
-        var duplicateBook = BookCopy.Create(existingBook.Id, "978-966-00-0000-0", "Книга-Дублікат", false);
-        store.Add(duplicateBook);
-    }
-}
-catch (Exception ex)
+    changes++;
+    Console.WriteLine($"  [COUNT] {changes}");
+};
+
+// КРОК 5: Сценарій роботи, перевірка лічильника та відписка (-=)
+Console.WriteLine("=== Крок 5: Демонстрація подій та відписки ===");
+
+BookCopy added1 = service.AddBookCopy("978-966-03-1234-5", "Кобзар");
+Loan loan1 = service.IssueBook(added1.Id, "Reader-Ivan", DateTime.Now);
+service.ReturnBook(loan1.Id, added1.Id, DateTime.Now);
+
+Console.WriteLine($"Подій отримано (очікується 3): {changes}\n");
+
+// Відписуємо логер консолі/файлу, залишаємо тільки лямбду-лічильник
+service.Changed -= OnLibraryChanged; //dod5
+Console.WriteLine("--- Виконано відписку логера (service.Changed -= OnLibraryChanged) ---");
+
+// Тиха операція: запису в лог немає, але дані змінюються і лічильник росте
+BookCopy added2 = service.AddBookCopy("978-966-03-9999-1", "Тіні забутих предків");
+Loan loan2 = service.IssueBook(added2.Id, "Reader-Olena", DateTime.Now);
+
+Console.WriteLine($"Подій отримано після тихих операцій (очікується 5): {changes}");
+Console.WriteLine($"Стан книги '{added2.Title}' у сховищі: {(service.FindBook(added2.Id)?.IsIssued == true ? "видана" : "у бібліотеці")}\n");
+
+// Повернемо підписку логера для демонстрації сценарію відмови (Крок 6)
+service.Changed += OnLibraryChanged;
+
+// КРОК 6: Сценарій відмови (порушення інваріантів- події НЕ повинно бути)
+Console.WriteLine("=== Крок 6: Сценарій відмови (виняток є, події немає) ===");
+
+TryDo("Спроба видати неіснуючий примірник",
+      () => service.IssueBook("wrong-id-12345", "Reader-Oleh", DateTime.Now));
+
+TryDo("Спроба повторно видати вже видану книгу",
+      () => service.IssueBook(added2.Id, "Reader-Petro", DateTime.Now));
+
+TryDo("Спроба додати книгу з порожнім ISBN",
+      () => service.AddBookCopy("   ", "Книга без ISBN"));
+
+TryDo("Спроба повернути книгу раніше за дату видачі",
+      () => service.ReturnBook(loan2.Id, added2.Id, DateTime.Now.AddDays(-30)));
+
+Console.WriteLine($"Лічильник подій після невдалих операцій не змінився (очікується 5): {changes}\n");
+
+// КРОК 6.1: Скасування видачі (подія LoanCanceled)
+Console.WriteLine("=== Крок 6.1: Скасування видачі ===");
+
+BookCopy added3 = service.AddBookCopy("978-966-03-7777-7", "Беззоряне море");
+Loan loan3 = service.IssueBook(added3.Id, "Reader-Anna", DateTime.Now);
+service.CancelLoan(loan3.Id, added3.Id);
+
+Console.WriteLine($"Подій отримано (очікується 8): {changes}");
+Console.WriteLine($"Стан книги '{added3.Title}': {(service.FindBook(added3.Id)?.IsIssued == true ? "видана" : "у бібліотеці")}\n");
+
+// КРОК 7: Делегат Func<BookCopy, bool> замість події (повернення значення)
+Console.WriteLine("=== Крок 7: Пошук через Func<BookCopy, bool> ===");
+
+var issuedBooks = service.SearchBooks(b => b.IsIssued);
+Console.WriteLine($"Зараз видано книг читачам: {issuedBooks.Count}");
+foreach (var book in issuedBooks)
 {
-    Console.WriteLine($"[Успішно перехоплено помилку сховища]: {ex.Message}");
+    Console.WriteLine($"   - {book}");
 }
 
-// операція з неіснуючим ID
-try
-{
-    service.IssueBook("wrong-id-12345", "Reader-Oleh", DateTime.Now);
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"[Успішно перехоплено помилку сервісу]: {ex.Message}");
-}
-
-//додаткове 2
-Console.WriteLine("\n=== Додаткове завдання 2: пошук з Func<BookCopy, bool> ===");
-
-//всі вільні примірники
 var availableBooks = service.SearchBooks(b => !b.IsIssued);
 Console.WriteLine($"Вільних книг у бібліотеці: {availableBooks.Count}");
 
-//за частиною назви 
-var specificBooks = service.SearchBooks(b => b.Title.Contains("Вавилон", StringComparison.OrdinalIgnoreCase));
-if (specificBooks.Count == 0)
-{
-    Console.WriteLine("За назвою 'Вавилон' нічого не знайдено.");
-}
-foreach (BookCopy book in specificBooks)
-{
-    Console.WriteLine($"Знайдено за назвою: {book}");
-}
-
-Console.WriteLine("\n=== Кінець роботи програми ===");
+Console.WriteLine($"\nФайл журналу збережено за шляхом: {logPath}");
+Console.WriteLine("=== Кінець роботи програми ===");
 return 0;
-//допоміжні
-static int MaxLoans() => LoanService.MaxOpenLoansPerReader;
 
+// Допоміжний метод для перевірки винятків
 static void TryDo(string rule, Action action)
 {
     try
@@ -220,6 +183,6 @@ static void TryDo(string rule, Action action)
         int p = message.IndexOf(" (Parameter", StringComparison.Ordinal);
         if (p >= 0) message = message[..p];
 
-        Console.WriteLine($"{rule}\n    {ex.GetType().Name}: {message}");
+        Console.WriteLine($"[Очікувана помилка] {rule} -> {ex.GetType().Name}: {message}");
     }
 }
