@@ -12,14 +12,14 @@ public sealed class LoanService(ILibraryStore store)
 {
     private readonly ILibraryStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
-    public const int MaxOpenLoansPerReader = 5; // 1 читач — максимум 5 книг
+    public const int MaxOpenLoansPerReader = 5; // 1 читач, максимум 5 книг
     public const int DefaultLoanDays = 14;      // стандартний термін видачі (для DueDate)
 
     private readonly List<Loan> _loans = [];
     private int _nextLoanNumber = 1;
 
     // Подія сповіщення про зміни в бібліотеці
-    public event EventHandler<LibraryChangedEventArgs>? Changed;
+    public event EventHandler<LibraryChangedEventArgs>? Changed; //dod2
 
     private void OnChanged(LibraryChangeKind kind, string copyId, string? readerId = null, DateTime? dueDate = null) =>
         Changed?.Invoke(this, new LibraryChangedEventArgs(kind, copyId, readerId, dueDate));
@@ -77,7 +77,7 @@ public sealed class LoanService(ILibraryStore store)
         var loan = GetLoan(loanId, copy);
         EnsureCopyIssued(copy);
 
-        loan.Close(returnedOn); // якщо кине виняток — копія не змінена і події не буде
+        loan.Close(returnedOn); // якщо кине виняток - копія не змінена і події не буде
         copy.ReturnCopy();
 
         _store.Update(copy);
@@ -107,7 +107,7 @@ public sealed class LoanService(ILibraryStore store)
     public BookCopy? FindBook(string id) => _store.GetById(id);
 
     // Пошук за довільною умовою через Func<BookCopy, bool>
-    public IReadOnlyList<BookCopy> SearchBooks(Func<BookCopy, bool> predicate) =>
+    public IReadOnlyList<BookCopy> SearchBooks(Func<BookCopy, bool> predicate) => //dod6
         _store.Find(predicate);
 
     private Loan GetLoan(string loanId, BookCopy copy)
